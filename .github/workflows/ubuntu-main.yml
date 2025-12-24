@@ -1,0 +1,55 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  linux-rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Update system
+        run: |
+          sudo apt update -y
+          sudo apt upgrade -y
+
+      - name: Install desktop and XRDP
+        run: |
+          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11
+          echo xfce4-session > ~/.xsession
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+      - name: Create RDP user
+        run: |
+          PASSWORD=$(openssl rand -base64 16)
+          sudo useradd -m rdp
+          echo "rdp:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo rdp
+          echo "RDP_USER=rdp" >> $GITHUB_ENV
+          echo "RDP_PASS=$PASSWORD" >> $GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=gh-linux-${{ github.run_id }}
+
+          tailscale ip -4 | head -n 1 > ts_ip.txt
+          echo "TAILSCALE_IP=$(cat ts_ip.txt)" >> $GITHUB_ENV
+
+      - name: Verify RDP
+        run: |
+          sudo ss -tlnp | grep 3389 || exit 1
+
+      - name: Keep alive
+        run: |
+          echo "======================"
+          echo "RDP IP: $TAILSCALE_IP"
+          echo "User: $RDP_USER"
+          echo "Pass: $RDP_PASS"
+          echo "======================"
+          while true; do sleep 300; done
