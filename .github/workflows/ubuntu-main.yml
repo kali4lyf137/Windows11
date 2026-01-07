@@ -2,54 +2,74 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux-rdp:
+  secure-rdp:
     runs-on: ubuntu-latest
-    timeout-minutes: 3600
+    timeout-minutes: 3600000
 
     steps:
       - name: Update system
         run: |
           sudo apt update -y
-          sudo apt upgrade -y
 
-      - name: Install desktop and XRDP
+      - name: Install Ubuntu GNOME Desktop + XRDP
         run: |
-          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11
-          echo xfce4-session > ~/.xsession
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            ubuntu-desktop-minimal \
+            gnome-session \
+            gdm3 \
+            xrdp
+
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
 
-      - name: Create RDP user
+      - name: Configure XRDP for GNOME
+        run: |
+          echo "gnome-session" | sudo tee /etc/skel/.xsession
+          sudo sed -i 's/^test -x/#test -x/' /etc/xrdp/startwm.sh
+          sudo sed -i 's/^exec /#exec /' /etc/xrdp/startwm.sh
+          echo "exec gnome-session" | sudo tee -a /etc/xrdp/startwm.sh
+
+      - name: Create RDP User
         run: |
           PASSWORD=$(openssl rand -base64 16)
           sudo useradd -m rdp
           echo "rdp:$PASSWORD" | sudo chpasswd
           sudo usermod -aG sudo rdp
+
           echo "RDP_USER=rdp" >> $GITHUB_ENV
           echo "RDP_PASS=$PASSWORD" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
+          sudo systemctl enable tailscaled
+          sudo systemctl start tailscaled
 
       - name: Connect Tailscale
         run: |
           sudo tailscale up \
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
-            --hostname=gh-linux-${{ github.run_id }}
+            --hostname=gh-ubuntu-${{ github.run_id }}
 
-          tailscale ip -4 | head -n 1 > ts_ip.txt
-          echo "TAILSCALE_IP=$(cat ts_ip.txt)" >> $GITHUB_ENV
+          TS_IP=$(tailscale ip -4)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Verify RDP
+      - name: Verify RDP Port
         run: |
           sudo ss -tlnp | grep 3389 || exit 1
 
-      - name: Keep alive
+      - name: RDP Access Info
         run: |
-          echo "======================"
-          echo "RDP IP: $TAILSCALE_IP"
-          echo "User: $RDP_USER"
-          echo "Pass: $RDP_PASS"
-          echo "======================"
-          while true; do sleep 300; done
+          echo "=============================="
+          echo "RDP Address : $TAILSCALE_IP"
+          echo "Username    : $RDP_USER"
+          echo "Password    : $RDP_PASS"
+          echo "Desktop     : Ubuntu GNOME"
+          echo "=============================="
+
+      - name: Keep Runner Alive
+        run: |
+          while true; do
+            echo "[`date`] RDP ACTIVE"
+            sleep 300
+          done
